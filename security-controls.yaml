@@ -1,0 +1,9 @@
+controls:
+  waf:
+    enabled: true
+  api_discovery:
+    enabled: false
+  bot_advanced:
+    enabled: false
+  rate_limiting:
+    enabled: false

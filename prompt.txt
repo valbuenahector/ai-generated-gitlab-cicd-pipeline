@@ -1,0 +1,11 @@
+Write a new .gitlab-ci. yml with the new approach using security-controls.yaml file and using the following:
+- stages: policy_gate,test, build,deploy
+- Write a validate_security_controls.sh (or python) and security-controls.yaml with minimal schema and export to features.env
+- policy_gate stage should follow the criteria i have described:
+  1.- Enforce the existence of security-controls.txt (or JSON or YAML). If the file does not exist, the CI/CD pipeline will fail with an error like, but more formal, "A security-controls file MUST exist in the repo (or GitLab project) for the Application to be published."
+  2.- security-controls file will contain settings for WAF, API discovery, Advanced BOT protection, and Rate limiting
+  3.- Enforce that the WAF setting MUST be enabled (minimum app security)
+  4.- API discovery, advanced BOT protection, and Rate limiting are optional security controls
+  5.- If API discovery is enabled. Enforce the presence of openapi/openapi.json
+  6.- If advance BOT protection is enabled, enforce the presence of app/templates/login.html and app/templates/contact.html
+

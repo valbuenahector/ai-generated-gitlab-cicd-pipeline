@@ -1,0 +1,151 @@
+# .gitlab-ci.yml
+#
+# AppWorld 2026 – Module 2/3 Lab
+# Security-as-Code gate using security-controls.yaml
+#
+# Stages:
+#   1) policy_gate: enforce baseline security controls + conditional requirements
+#   2) test: app tests
+#   3) build: build & push image
+#   4) deploy: terraform apply (vK8s + LB + security toggles)
+#
+# Files:
+#   - security-controls.yaml (required)
+#   - openapi/openapi.json (required if api_discovery.enabled: true)
+#   - app/templates/login.html + app/templates/contact.html (required if bot_advanced.enabled: true)
+#
+# Outputs:
+#   - features.env (dotenv artifact) => ENABLE_WAF, ENABLE_API_DISCOVERY, ENABLE_BOT_ADVANCED, ENABLE_RATE_LIMITING
+
+stages:
+  - policy_gate
+  - test
+  - build
+  - deploy
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+default:
+  interruptible: true
+
+# ---------------------------
+# Stage 1 – POLICY GATE
+# ---------------------------
+policy_gate:
+  stage: policy_gate
+  # Intentionally no image: this job is designed to run on a SHELL runner
+  # (If you later move to Docker runner, set image: alpine + install yq/python accordingly.)
+  tags: ["shell"]
+  rules:
+    - when: always
+  script:
+    - chmod +x scripts/validate_security_controls.sh
+    - ./scripts/validate_security_controls.sh
+    - echo "Policy gate passed. Exported features.env:"
+    - cat features.env
+  artifacts:
+    reports:
+      dotenv: features.env
+    expire_in: 2 hours
+
+# ---------------------------
+# Stage 2 – TEST
+# ---------------------------
+test:
+  stage: test
+  # If you use Docker executor runners, set an image.
+  # If you use Shell runner, remove image and ensure python/pytest exist on the runner VM.
+  image: python:3.11-slim
+  needs: ["policy_gate"]
+  rules:
+    - when: on_success
+  script:
+    - python -V
+    - pip install -r requirements.txt
+    - pytest -q
+
+# ---------------------------
+# Stage 3 – BUILD & PUSH IMAGE
+# ---------------------------
+build_and_push:
+  stage: build
+  image: docker:27
+  services:
+    - docker:27-dind
+  needs: ["policy_gate", "test"]
+  variables:
+    DOCKER_TLS_CERTDIR: ""
+  rules:
+    - when: on_success
+  before_script:
+    - set -eu
+    # --- GAR Auth (placeholder) ---
+    # Recommended: use a service account JSON stored as a masked GitLab variable: GCP_SA_JSON
+    # You will need gcloud available in the runner image or use a custom image that includes it.
+    #
+    # echo "$GCP_SA_JSON" > /tmp/sa.json
+    # gcloud auth activate-service-account --key-file=/tmp/sa.json
+    # gcloud config set project "$GAR_PROJECT"
+    # gcloud auth configure-docker "${GAR_REGION}-docker.pkg.dev" -q
+    - echo "TODO: authenticate docker to GAR (use a custom job image with gcloud or a pre-authenticated runner)"
+  script:
+    - set -eu
+    - IMAGE_PATH="${GAR_REGION}-docker.pkg.dev/${GAR_PROJECT}/${GAR_REPO}/${F5XC_NAMESPACE}/appworld-vulnapp"
+    - IMAGE_TAG="${CI_COMMIT_SHORT_SHA}"
+    - IMAGE_REF="${IMAGE_PATH}:${IMAGE_TAG}"
+
+    - docker build -t "$IMAGE_REF" .
+    - docker push "$IMAGE_REF"
+
+    - echo "IMAGE_REF=$IMAGE_REF" > build.env
+    - cat build.env
+  artifacts:
+    reports:
+      dotenv: build.env
+    expire_in: 2 hours
+
+# ---------------------------
+# Stage 4 – DEPLOY (Terraform)
+# ---------------------------
+deploy_f5xc:
+  stage: deploy
+  image: hashicorp/terraform:1.6
+  needs: ["policy_gate", "build_and_push"]
+  rules:
+    # Lab default: deploy only from default branch
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: on_success
+    - when: never
+  before_script:
+    - set -eu
+    - cd terraform
+
+    # State strategy:
+    # A) Local state (simplest if runner workspace persists)
+    - terraform init -upgrade
+
+    # B) Remote state (recommended if using Docker executor with ephemeral workspaces)
+    # terraform init -upgrade \
+    #   -backend-config="bucket=${TF_STATE_BUCKET}" \
+    #   -backend-config="prefix=appworld/tfstate/${F5XC_NAMESPACE}"
+  script:
+    - set -eu
+    - terraform apply -auto-approve \
+        -var "namespace=${F5XC_NAMESPACE}" \
+        -var "f5xc_api_token=${F5XC_API_TOKEN}" \
+        -var "image=${IMAGE_REF}" \
+        -var "enable_waf=${ENABLE_WAF}" \
+        -var "enable_api_discovery=${ENABLE_API_DISCOVERY}" \
+        -var "enable_bot_advanced=${ENABLE_BOT_ADVANCED}" \
+        -var "enable_rate_limiting=${ENABLE_RATE_LIMITING}" \
+        -var "openapi_spec_path=../openapi/openapi.json"
+  artifacts:
+    when: always
+    paths:
+      - terraform/terraform.tfstate
+      - terraform/terraform.tfstate.backup
+    expire_in: 2 hours
