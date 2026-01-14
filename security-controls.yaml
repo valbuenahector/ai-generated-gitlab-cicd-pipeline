@@ -1,6 +1,6 @@
 controls:
   waf:
-    enabled: true
+    enabled: false
   api_discovery:
     enabled: false
   bot_advanced:
