@@ -43,8 +43,7 @@ policy_gate:
   rules:
     - when: always
   script:
-    - chmod +x scripts/validate_security_controls.sh
-    - ./scripts/validate_security_controls.sh
+    - python3 scripts/validate_security_controls.py
     - echo "Policy gate passed. Exported features.env:"
     - cat features.env
   artifacts:
