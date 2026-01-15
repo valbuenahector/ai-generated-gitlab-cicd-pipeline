@@ -68,7 +68,12 @@ test:
     - pytest -q
 
 # ---------------------------
-# Stage 3 – BUILD & PUSH IMAGE
+# Stage 3 – BUILD & PUSH IMAGE (ACR, amd64, short-sha tag)
+# Image format:
+#   <login-server>/appworld/<student-id>/<app>:${CI_COMMIT_SHORT_SHA}
+# Where:
+#   <student-id> == $F5XC_NAMESPACE
+#   <app>        == $APP_NAME (default: f5-ai-generated-app)
 # ---------------------------
 build_and_push:
   stage: build
@@ -78,34 +83,48 @@ build_and_push:
   needs: ["policy_gate", "test"]
   variables:
     DOCKER_TLS_CERTDIR: ""
+    DOCKER_BUILDKIT: "1"
   rules:
     - when: on_success
+
   before_script:
-    - set -eu
-    # --- GAR Auth (placeholder) ---
-    # Recommended: use a service account JSON stored as a masked GitLab variable: GCP_SA_JSON
-    # You will need gcloud available in the runner image or use a custom image that includes it.
-    #
-    # echo "$GCP_SA_JSON" > /tmp/sa.json
-    # gcloud auth activate-service-account --key-file=/tmp/sa.json
-    # gcloud config set project "$GAR_PROJECT"
-    # gcloud auth configure-docker "${GAR_REGION}-docker.pkg.dev" -q
-    - echo "TODO: authenticate docker to GAR (use a custom job image with gcloud or a pre-authenticated runner)"
+    - set -euo pipefail
+
+    # --- Required variables ---
+    - test -n "${ACR_LOGIN_SERVER:?ACR_LOGIN_SERVER is required}"
+    - test -n "${ACR_USERNAME:?ACR_USERNAME is required}"
+    - test -n "${ACR_PASSWORD:?ACR_PASSWORD is required}"
+    - test -n "${F5XC_NAMESPACE:?F5XC_NAMESPACE (student-id) is required}"
+    - test -n "${CI_COMMIT_SHORT_SHA:?CI_COMMIT_SHORT_SHA is required}"
+
+    # Optional app name
+    - APP_NAME="${APP_NAME:-f5-ai-generated-app}"
+
+    # --- Login to ACR ---
+    - docker login "$ACR_LOGIN_SERVER" -u "$ACR_USERNAME" -p "$ACR_PASSWORD"
+
+    # --- Enable buildx for explicit amd64 builds ---
+    - docker buildx create --use --name appworld-builder || docker buildx use appworld-builder
+
   script:
-    - set -eu
-    - IMAGE_PATH="${GAR_REGION}-docker.pkg.dev/${GAR_PROJECT}/${GAR_REPO}/${F5XC_NAMESPACE}/appworld-vulnapp"
-    - IMAGE_TAG="${CI_COMMIT_SHORT_SHA}"
-    - IMAGE_REF="${IMAGE_PATH}:${IMAGE_TAG}"
+    - set -euo pipefail
 
-    - docker build -t "$IMAGE_REF" .
-    - docker push "$IMAGE_REF"
+    # Construct image ref
+    - IMAGE_REF="${ACR_LOGIN_SERVER}/appworld/${F5XC_NAMESPACE}/${APP_NAME}:${CI_COMMIT_SHORT_SHA}"
+    - echo "Building and pushing: ${IMAGE_REF}"
 
+    # Build + push (amd64)
+    - docker buildx build --platform linux/amd64 -t "$IMAGE_REF" --push .
+
+    # Export for deploy stage (Terraform reads IMAGE_REF from dotenv)
     - echo "IMAGE_REF=$IMAGE_REF" > build.env
     - cat build.env
+
   artifacts:
     reports:
       dotenv: build.env
     expire_in: 2 hours
+
 
 # ---------------------------
 # Stage 4 – DEPLOY (Terraform)
@@ -119,20 +138,26 @@ deploy_f5xc:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: on_success
     - when: never
+
   before_script:
-    - set -eu
+    - set -euo pipefail
     - cd terraform
 
-    # State strategy:
-    # A) Local state (simplest if runner workspace persists)
-    - terraform init -upgrade
+    # --- Required vars (fail fast with clear messages) ---
+    - test -n "${F5XC_NAMESPACE:?F5XC_NAMESPACE is required}"
+    - test -n "${F5XC_API_TOKEN:?F5XC_API_TOKEN is required}"
+    - test -n "${IMAGE_REF:?IMAGE_REF is required (from build.env artifact)}"
 
-    # B) Remote state (recommended if using Docker executor with ephemeral workspaces)
-    # terraform init -upgrade \
-    #   -backend-config="bucket=${TF_STATE_BUCKET}" \
-    #   -backend-config="prefix=appworld/tfstate/${F5XC_NAMESPACE}"
+    # Optional feature flags should still exist if your TF expects them
+    - test -n "${ENABLE_WAF:?ENABLE_WAF is required}"
+    - test -n "${ENABLE_API_DISCOVERY:?ENABLE_API_DISCOVERY is required}"
+    - test -n "${ENABLE_BOT_ADVANCED:?ENABLE_BOT_ADVANCED is required}"
+    - test -n "${ENABLE_RATE_LIMITING:?ENABLE_RATE_LIMITING is required}"
+
+    terraform init -upgrade
+
   script:
-    - set -eu
+    - set -euo pipefail
     - terraform apply -auto-approve \
         -var "namespace=${F5XC_NAMESPACE}" \
         -var "f5xc_api_token=${F5XC_API_TOKEN}" \
@@ -142,6 +167,7 @@ deploy_f5xc:
         -var "enable_bot_advanced=${ENABLE_BOT_ADVANCED}" \
         -var "enable_rate_limiting=${ENABLE_RATE_LIMITING}" \
         -var "openapi_spec_path=../openapi/openapi.json"
+
   artifacts:
     when: always
     paths:
