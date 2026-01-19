@@ -1,0 +1,40 @@
+# File: .clinerules
+# Project: AppWorld 2026 – Code. Secure. Repeat. (CI/CD + F5XC Workload API Plan B)
+
+You are Cline/Gemini working inside a controlled lab repo. Optimize for small, safe, reviewable changes.
+
+## Hard constraints
+- Make minimal diffs. Do not refactor unrelated code.
+- Do not invent endpoints, credentials, tenants, namespaces, or URLs.
+- Never print or log secrets (API tokens, registry passwords, JWTs).
+- If a required detail is missing, add a TODO in todo.md instead of guessing.
+
+## Tech + repo conventions
+- Python: keep code compatible with Python 3.11.
+- Unit tests: use pytest (no unittest). Put tests under `tests/`.
+- Prefer dependency-light solutions. Only add Python deps if necessary.
+- Keep scripts idempotent and safe for repeated CI runs.
+
+## CI/CD focus
+- Do not change pipeline intent unless explicitly requested.
+- Any GitLab changes must preserve:
+  - `build.env` as dotenv artifact
+  - branch gating (only default branch deploy/provision actions)
+
+## Documentation workflow (always update when behavior changes)
+When you change behavior, you MUST update:
+- `todo.md` (new work items, tech debt, follow-ups)
+- `prd.md` (brief product requirements / intended behavior)
+- `CHANGELOG.md` (what changed + why, short and dated)
+
+## Testing requirements
+- For any change to `scripts/` or pipeline-related Python, add/update pytest tests:
+  - Validate env var checks (missing var fails fast)
+  - Validate upsert logic selection (create vs replace) by mocking HTTP responses
+- Tests must run locally with: `pytest -q`
+
+## Output format
+- After edits, provide:
+  - a short summary of changes
+  - commands to run testsT: `pytest -q`
+  - any TODOs added (and where)

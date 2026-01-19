@@ -70,3 +70,148 @@ https://registry.terraform.io/providers/volterraedge/volterra/latest/docs/resour
 │ 
 │ The provider volterraedge/volterra does not support resource type "volterra_workload".
 ╵
+=========================
+
+
+You are editing an existing AppWorld 2026 lab repository for Gitlab CI/CD pipeline. 
+Do NOT create new features beyond what is requested. Make the smallest, safest set of changes.
+
+GOAL
+Implement Plan B: manage the F5XC vK8s Workload via the F5XC Workload REST API (Python), 
+while keeping Stage 4 reserved for Terraform later (LB/WAAP). 
+We are not touching Terraform in this change set.
+
+FILES TO EDIT (ONLY THESE)
+1) scripts/stage3/workload_manager.py
+2) gitlab-ci.yml
+3) scripts/stage3/volterra_workload_api_schema.json  (for reference ONLY / doc-only annotations / notes allowed, but do not change the upstream API schema structure)
+
+HARD RULES
+- Keep changes minimal and easy to debug in a student lab.
+- Do not combine Docker build/push logic into the Python script. The build_and_push job remains responsible for Docker build + push + IMAGE_REF generation.
+- The workload creation/update must be idempotent: “upsert” behavior.
+- Do not introduce new dependencies unless absolutely necessary. Only the one in scripts/stage3/requirements.txt file
+- Install necesary dependencies in local virutal enviroment ai-generated-gitlab-cicd-pipeline for testing locally
+- Never print secrets (F5XC_API_TOKEN, registry passwords).
+
+=====================================================================
+1) scripts/stage3/workload_manager.py — REQUIRED CHANGES
+=====================================================================
+
+A) Add a new CLI operation: `upsert`
+- Behavior:
+  1) GET workload (by namespace + workload name)
+  2) If it exists: REPLACE (PUT)
+  3) If it does not exist (HTTP 404): CREATE (POST)
+  4) Any other failure: exit non-zero with a clear error message
+
+B) Expand required environment variable validation (fail-fast)
+- Existing script validates some env vars; update it to require:
+  - F5XC_API_URL
+  - F5XC_API_TOKEN
+  - F5XC_TENANT
+  - F5XC_NAMESPACE
+  - F5XC_WORKLOAD_NAME
+  - F5XC_SITE_NAME
+  - IMAGE_REF
+- Add optional env vars with defaults:
+  - F5XC_SITE_NAMESPACE (default: "shared")
+  - F5XC_REGISTRY_TENANT (default: F5XC_TENANT)
+- If any required value is missing or empty, print a single-line error and exit(1).
+
+C) Remove brittle hard-coding
+- The code currently conditionally appends a tenant suffix (e.g. "-qyyfhhfj") in the payload.
+- Remove this hard-coded tenant modification entirely.
+- Use tenant value in payload as:
+  registry tenant = F5XC_REGISTRY_TENANT if set, else F5XC_TENANT
+
+D) Make the virtual site namespace configurable
+- Payload currently uses namespace "shared" for the CE virtual site reference.
+- Replace with F5XC_SITE_NAMESPACE (default "shared").
+
+E) Ensure payload uses IMAGE_REF exactly as produced by the pipeline
+- The container image value must come from IMAGE_REF environment variable.
+- Do not attempt to build tags inside the script.
+
+F) Keep existing operations intact
+- Maintain existing operations (create/replace/get/delete) if they exist today.
+- Add `upsert` without breaking existing CLI usage.
+
+G) Safe output
+- Log only: operation name, workload name, namespace, and action taken (created/replaced).
+- Never log the token or full headers.
+
+Acceptance checks (must pass):
+- use pytest to test the scripts 
+- `python3 scripts/stage3/workload_manager.py upsert` works when IMAGE_REF is set and required env vars exist.
+- If workload exists -> “replace” action used.
+- If workload does not exist -> “create” action used.
+- Missing env var -> immediate failure with clear message.
+
+=====================================================================
+2) gitlab-ci.yml — REQUIRED CHANGES
+=====================================================================
+
+A) Keep existing jobs unless explicitly changed below.
+
+B) Add a new job to upsert the workload AFTER build_and_push
+- Job name: provision_vk8s_workload
+- Stage: build (same stage as build_and_push, but it must run after build_and_push via `needs`)
+- Image: python:3.11-slim
+- `needs`: ["policy_gate", "build_and_push"]
+- `rules`: only run on default branch (same branch gating as deploy)
+  - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH -> on_success
+  - else -> never
+- `before_script`:
+  - install requests (pip install requests)
+  - assert required env vars exist using `test -n`:
+    F5XC_API_URL, F5XC_API_TOKEN, F5XC_TENANT, F5XC_NAMESPACE, F5XC_SITE_NAME, F5XC_WORKLOAD_NAME, IMAGE_REF
+- `script`:
+  - run: python3 scripts/stage3/workload_manager.py upsert
+
+C) Ensure IMAGE_REF is available to provision_vk8s_workload
+- build_and_push currently writes build.env as dotenv artifact; keep that behavior.
+- provision_vk8s_workload should inherit dotenv variables via needs/artifacts automatically.
+
+D) Do NOT change deploy_f5xc stage behavior yet
+- Stage 4 Terraform apply is not implemented yet; leave deploy stage present as-is, but if it currently depends on workload creation via Terraform, do not add new dependencies here.
+- If needed, add a comment in deploy_f5xc noting “Workload is API-managed in Stage 3”.
+
+Acceptance checks:
+- Pipeline still builds and pushes image as before.
+- On default branch, provision_vk8s_workload runs after build_and_push and consumes IMAGE_REF.
+- On non-default branches, provision_vk8s_workload does not run.
+
+=====================================================================
+3) volterra_workload_api_schema.json — REQUIRED CHANGES
+=====================================================================
+
+This file is an API schema reference. Do NOT rewrite or reformat it heavily.
+Make only the following minimal, safe documentation adjustments:
+
+A) Add a top-level comment field if allowed by JSON rules:
+- JSON does not support comments, so instead:
+  - Add a new top-level string field named: "_appworld_notes"
+  - Value: a short explanation that this schema is referenced by workload_manager.py and that Create/Replace/Get are used for upsert behavior.
+- Do not modify existing paths/definitions content.
+
+B) If a top-level field cannot be added safely due to strict schema checks in the repo, then do NOT modify this file at all.
+- In that case, create no alternative files. Just leave it unchanged.
+
+Acceptance checks:
+- File remains valid JSON.
+- No existing schema keys are removed or renamed.
+
+=====================================================================
+OUTPUT REQUIREMENTS
+=====================================================================
+- Apply the edits directly to the existing files.
+- Show a concise diff-like summary for each file:
+  - what changed
+  - why
+- Do NOT add unrelated refactors.
+- Do NOT add any new files.
+- Do NOT touch Terraform files.
+```
+
+Update (or create) CHANGELOG, todo.md and add the relevant unit testing 
