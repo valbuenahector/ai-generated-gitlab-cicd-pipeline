@@ -21,5 +21,52 @@ Write an python equivalent of the shell script validate_security_controls.sh to 
   4.- API discovery, advanced BOT protection, and Rate limiting are optional security controls
   5.- If API discovery is enabled. Enforce the presence of openapi/openapi.json
   6.- If advance BOT protection is enabled, enforce the presence of app/templates/login.html and app/templates/contact.html
-  7.- ANY other conbination of setting on the security-controls.yaml is not supporttd. Message the user
+  7.- ANY other conbination of setting on the security-controls.yaml is not supportted. Message the user
 
+
+
+===============
+
+
+
+Ok, I have a problem with current CI/CD pipeline. I need comments and recomendations with my plan B 
+
+Currently stage 4 deploy terraform apply and creates vK8s workload + LB + security controls 
+based on security-control.txt. There is a proble with the F5XC volterra_workload terraform resource. it appears
+the resource no longer exits and is not part of the schema. Ihave open question with product managment on this. 
+Meanwhile my plan B is : 
+
+1.- Move the F5Xc vK8s workload creation to stage 3 
+2.- The idea is to create a python script for stage 3 that:
+  - Login to ACR, 
+  - Build + push to ACR, 
+  - creates a the F5XC vK8s workload and 
+  - creates the build.env for Stage 4
+3.- I uderstand that the vK8s workload will be out of the terraform state file,so 
+    teh script needs to be capable of check wehther the F5XC vK8s workload exits
+    to perform a "replace" action instead of a "create" action. This important for 
+    Module 3 tasks 1 and 2
+
+please review the following files and provide comments and recomendations ont this plan B and 
+suggests chagnes to the gitlab-ci.yml
+
+reference files
+- scripts/stage3/workload_manager.py
+- gitlab-ci.yml
+- volterra_workload_api_schema.json
+
+
+Terraform ERROR (DO OT FOCUS ON THIS ERROR )
+
+https://registry.terraform.io/providers/volterraedge/volterra/latest/docs/resources/volterra_workload
+ 
+
+(f5xc-lb-waap-examples) h.valbuena@F6L0GYNXYN ce-vsite-k8s-volterra_workload % terraform plan         
+╷
+│ Error: Invalid resource type
+│ 
+│   on main.tf line 1, in resource "volterra_workload" "example":
+│    1: resource "volterra_workload" "example" {
+│ 
+│ The provider volterraedge/volterra does not support resource type "volterra_workload".
+╵

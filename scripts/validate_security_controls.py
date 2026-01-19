@@ -1,70 +1,75 @@
-import os
-import sys
 import yaml
+import sys
+import os
 
+# Configuration
 CONTROLS_FILE = "security-controls.yaml"
 FEATURES_ENV = "features.env"
 
 def fail(message):
+    """Prints error to stderr and exits with failure code."""
     print(f"POLICY GATE FAILED: {message}", file=sys.stderr)
     sys.exit(1)
 
-def validate_controls():
-    # 1. Enforce existence of security-controls.yaml
-    if not os.path.exists(CONTROLS_FILE):
-        fail("A security-controls file MUST exist in the repository for the Application to be published.")
+# Helper to safely navigate the nested dict and return a boolean
+def get_control_bool(data, path):
+    keys = path.split('.')
+    val = data
+    for key in keys:
+        if isinstance(val, dict):
+            val = val.get(key, False)
+        else:
+            return False
+    return bool(val)
 
+def main():
+    # 1) Enforce controls file existence
+    if not os.path.isfile(CONTROLS_FILE):
+        fail(f"A security-controls file MUST exist in the repository. Expected: {CONTROLS_FILE}")
+
+    # Load YAML data
     try:
-        with open(CONTROLS_FILE, 'r') as f:
+        with open(CONTROLS_FILE, "r") as f:
             data = yaml.safe_load(f) or {}
-    except Exception as e:
-        fail(f"Failed to parse {CONTROLS_FILE}: {e}")
+    except yaml.YAMLError as exc:
+        fail(f"Error parsing {CONTROLS_FILE}: {exc}")
 
-    # 2. Extract settings
-    controls = data.get('controls', {})
-    
-    # 7. ANY other combination of setting on the security-controls.yaml is not supported.
-    # We validate that only known keys exist in 'controls'
-    supported_keys = {'waf', 'api_discovery', 'bot_advanced', 'rate_limiting'}
-    actual_keys = set(controls.keys())
-    if not actual_keys.issubset(supported_keys):
-        unsupported = actual_keys - supported_keys
-        fail(f"Unsupported security controls found: {unsupported}. Only WAF, API discovery, Advanced BOT protection, and Rate limiting are supported.")
+    # Extract configuration values
+    enable_waf = get_control_bool(data, "controls.waf.enabled")
+    enable_api_discovery = get_control_bool(data, "controls.api_discovery.enabled")
+    enable_bot_advanced = get_control_bool(data, "controls.bot_advanced.enabled")
+    enable_rate_limiting = get_control_bool(data, "controls.rate_limiting.enabled")
 
-    waf = controls.get('waf', {})
-    api_discovery = controls.get('api_discovery', {})
-    bot_advanced = controls.get('bot_advanced', {})
-    rate_limiting = controls.get('rate_limiting', {})
-
-    enable_waf = waf.get('enabled', False)
-    enable_api_discovery = api_discovery.get('enabled', False)
-    enable_bot_advanced = bot_advanced.get('enabled', False)
-    enable_rate_limiting = rate_limiting.get('enabled', False)
-
-    # 3. Enforce WAF setting MUST be enabled
+    # 2) Enforce WAF must be enabled (Minimum security)
     if not enable_waf:
-        fail("WAF must be enabled as the minimum application security baseline. Set controls.waf.enabled: true in security-controls.yaml")
+        fail(f"WAF must be enabled as the minimum application security baseline. Set controls.waf.enabled: true in {CONTROLS_FILE}")
 
-    # 5. If API discovery is enabled, enforce presence of openapi/openapi.json
+    # 3) If API discovery enabled, enforce openapi exists
     if enable_api_discovery:
         if not os.path.isfile("openapi/openapi.json"):
-            fail("API discovery is enabled, but openapi/openapi.json is missing. Provide the OpenAPI spec at openapi/openapi.json")
+            fail("API discovery is enabled, but openapi/openapi.json is missing.")
 
-    # 6. If advance BOT protection is enabled, enforce presence of templates
+    # 4) If advanced BOT enabled, enforce templates exist
     if enable_bot_advanced:
-        if not os.path.isfile("app/templates/login.html"):
-            fail("Advanced BOT protection is enabled, but app/templates/login.html is missing.")
-        if not os.path.isfile("app/templates/contact.html"):
-            fail("Advanced BOT protection is enabled, but app/templates/contact.html is missing.")
+        required_templates = ["app/templates/login.html", "app/templates/contact.html"]
+        missing_templates = []
+        for template in required_templates:
+            if not os.path.isfile(template):
+                missing_templates.append(template)
+        if len(missing_templates) > 0:
+            fail(f"Advanced BOT protection is enabled, but {', '.join(missing_templates)} {"are" if len(missing_templates) > 1 else 'is'} missing.")
 
-    # Write features.env
-    with open(FEATURES_ENV, 'w') as f:
-        f.write(f"ENABLE_WAF={str(enable_waf).lower()}\n")
-        f.write(f"ENABLE_API_DISCOVERY={str(enable_api_discovery).lower()}\n")
-        f.write(f"ENABLE_BOT_ADVANCED={str(enable_bot_advanced).lower()}\n")
-        f.write(f"ENABLE_RATE_LIMITING={str(enable_rate_limiting).lower()}\n")
-
-    print("Security controls validated successfully.")
+    # Export dotenv for downstream stages
+    try:
+        with open(FEATURES_ENV, "w") as f:
+            f.write(f"ENABLE_WAF={str(enable_waf).lower()}\n")
+            f.write(f"ENABLE_API_DISCOVERY={str(enable_api_discovery).lower()}\n")
+            f.write(f"ENABLE_BOT_ADVANCED={str(enable_bot_advanced).lower()}\n")
+            f.write(f"ENABLE_RATE_LIMITING={str(enable_rate_limiting).lower()}\n")
+        print(f"Success: {FEATURES_ENV} generated.")
+    except IOError as e:
+        fail(f"Could not write to {FEATURES_ENV}: {e}")
 
 if __name__ == "__main__":
-    validate_controls()
+    main()
+ 

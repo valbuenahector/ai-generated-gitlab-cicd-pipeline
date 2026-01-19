@@ -37,22 +37,24 @@ default:
 # ---------------------------
 policy_gate:
   stage: policy_gate
-  # Intentionally no image: this job is designed to run on a SHELL runner
-  # (If you later move to Docker runner, set image: alpine + install yq/python accordingly.)
-  tags: ["shell"]
+  image: python:3.11-slim
   rules:
     - when: always
+  before_script:
+    - pip install pyyaml
   script:
+    # Run the validation script
     - python3 scripts/validate_security_controls.py
-    - echo "Policy gate passed. Exported features.env:"
-    - cat features.env
   artifacts:
+    # This makes features.env available to all subsequent stages
     reports:
       dotenv: features.env
+    paths:
+      - features.env
     expire_in: 2 hours
-
+ 
 # ---------------------------
-# Stage 2 – TEST
+# Stage 2 – TEST- PROBABLY A DUMMY STAGE
 # ---------------------------
 test:
   stage: test
